@@ -5,169 +5,208 @@ import plotly.graph_objects as go
 
 st.set_page_config(layout="wide", page_title="Global LNG Export Plant Simulator")
 
-st.title("🏭 Global LNG Liquefaction Plant Simulator (Angola / Qatar / USA)")
-st.markdown("Toggle the plant configurations and feed qualities to see how the 3D process train reacts, and how it impacts the final LNG product specifications.")
+st.title("🏭 Global LNG Liquefaction Plant Simulator")
+st.markdown("Switch locations, choose your liquefaction technology, and manipulate process parameters to see the economic and physical impacts on the plant.")
 
 # ==========================================
-# 1. SIDEBAR CONTROLS (Locations & Toggles)
+# 1. SIDEBAR CONTROLS
 # ==========================================
-st.sidebar.header("🌍 Feed Gas Origin")
-location = st.sidebar.selectbox("Select Export Terminal Location", ["Angola LNG (Soyo)", "Qatar LNG (Ras Laffan)", "USA LNG (Sabine Pass)"])
-st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Plant Operations (Bypasses)")
-# Toggles to simulate equipment failure or bypass
-bypass_amine = st.sidebar.checkbox("BYPASS Acid Gas Removal (Amine)", value=False, help="If bypassed, CO2 and H2S enter the cryogenic cold box.")
-bypass_fractionation = st.sidebar.checkbox("BYPASS NGL Fractionation", value=False, help="If bypassed, heavy hydrocarbons (C3+) remain in the LNG, spiking the Wobbe Index.")
+st.sidebar.header("🌍 Location & Feed")
+location = st.sidebar.selectbox("Select Export Terminal", ["Angola LNG (Soyo)", "Qatar LNG (Ras Laffan)", "USA LNG (Sabine Pass)"])
+co2_ppm = st.sidebar.slider("Feed CO2 (ppm)", 0, 3000, 1000)
+water_ppm = st.sidebar.slider("Feed Water (ppm)", 1, 500, 250)
+c3_percent = st.sidebar.slider("Feed C3+ (Richness) %", 1.0, 20.0, 12.0)
 
-# Default feed qualities based on location
-if location == "Angola LNG (Soyo)":
-    default_co2 = 150 # ppm (needs treatment)
-    default_c3 = 12.0 # % (Rich gas)
-    default_n2 = 0.5
-elif location == "Qatar LNG (Ras Laffan)":
-    default_co2 = 2500 # ppm (Very sour)
-    default_c3 = 8.0
-    default_n2 = 0.8
-else: # USA
-    default_co2 = 50 # ppm (Sweet)
-    default_c3 = 3.0 # % (Lean)
-    default_n2 = 2.5 # High Nitrogen
+st.sidebar.header("⚙️ Liquefaction Technology")
+tech = st.sidebar.radio("Select Technology", ["SMR (Single Mixed Refrigerant)", "C3MR (Propane Pre-cooled)", "DMR (Dual Mixed Refrigerant)"], 
+                        help="SMR: Low CAPEX, Low Eff. | C3MR: Industry Standard | DMR: High Capacity, High Eff.")
 
-st.sidebar.markdown("---")
-st.sidebar.header("🧪 Raw Feed Composition")
-co2_ppm = st.sidebar.slider("Feed CO2 (ppm)", 0, 3000, default_co2)
-c3_percent = st.sidebar.slider("Feed C3+ (Propane & Heavier) %", 1.0, 20.0, default_c3)
-n2_percent = st.sidebar.slider("Feed Nitrogen (N2) %", 0.1, 5.0, default_n2)
+st.sidebar.header("🛠️ Plant Configurations")
+n2_injection = st.sidebar.slider("Nitrogen Injection for Wobbe Control (mols)", 0, 15, 0, help="Injects N2 to lower the Wobbe Index of rich gas.")
+bypass_dehydration = st.sidebar.checkbox("BYPASS Dehydration (Molecular Sieves)", value=False)
+bypass_fractionation = st.sidebar.checkbox("BYPASS NGL Fractionation", value=False)
 
 # ==========================================
-# 2. THERMODYNAMIC & PROCESS LOGIC
+# 2. THERMODYNAMIC & ECONOMIC LOGIC
 # ==========================================
-# Ideal LNG specs: Wobbe Index ~ 50-52 MJ/m3, CO2 < 50 ppm
-# Calculate final product specs based on toggles
-final_co2 = co2_ppm if bypass_amine else min(co2_ppm, 50)
-final_c3 = c3_percent if bypass_fractionation else max(c3_percent - 8.0, 2.0) # Fractionation removes C3
-final_n2 = n2_percent # Nitrogen usually stays in LNG unless specifically rejected
+# Wobbe Index Calculation
+final_c3 = c3_percent if bypass_fractionation else max(c3_percent - 8.0, 2.0)
+wobbe_index = 48.0 + (final_c3 * 1.5) - (n2_injection * 0.5)
 
-# Simplified Wobbe Index Calculation (Higher C3 = Higher Wobbe, Higher N2 = Lower Wobbe)
-wobbe_index = 48.0 + (final_c3 * 1.5) - (final_n2 * 2.0)
+# Efficiency & Power Consumption (kWh/tonne of LNG)
+if tech == "SMR (Single Mixed Refrigerant)":
+    base_power = 380 # kWh/t
+    capex_factor = 1.0
+    plant_capacity = 1.5 # MTPA
+elif tech == "C3MR (Propane Pre-cooled)":
+    base_power = 300 # kWh/t
+    capex_factor = 1.5
+    plant_capacity = 4.0 # MTPA
+else: # DMR
+    base_power = 280 # kWh/t
+    capex_factor = 1.8
+    plant_capacity = 8.0 # MTPA
 
-# Determine Plant Status
-plant_status = "🟢 Optimal"
-cold_box_status = "Normal"
-spec_status = "In Spec"
+# Penalties for off-spec conditions
+if final_c3 > 8.0: base_power += 20 # Recycle penalties for heavy gas
+if wobbe_index > 54.0: base_power += 15 # Injecting N2 or blending
 
-if final_co2 > 50:
-    cold_box_status = "FROZEN"
-    plant_status = "🔴 SHUTDOWN"
-elif wobbe_index > 54.0:
-    spec_status = "OFF-SPEC (Rich)"
-elif wobbe_index < 45.0:
-    spec_status = "OFF-SPEC (Lean)"
+# Financials (Simplified)
+lng_price_per_tonne = 600 # USD
+daily_production = plant_capacity * 1e6 / 365 # Tonnes per day
+daily_power_cost = (daily_production * base_power) * 0.08 # $0.08/kWh
+daily_revenue = daily_production * lng_price_per_tonne
+daily_profit = daily_revenue - daily_power_cost
+
+# Failure Modes
+hydrate_risk = water_ppm > 1.0 and bypass_dehydration
+co2_freeze = co2_ppm > 50.0 
 
 # ==========================================
-# 3. 3D PLANT GEOMETRY GENERATOR
+# 3. 3D PLANT GEOMETRY (Detailed)
 # ==========================================
-# Helper function to draw cylinders (columns) and boxes
-def create_cylinder(x, y, z_base, height, radius, color):
+fig = go.Figure()
+
+# Helper functions for 3D shapes
+def draw_pipe(x0, x1, y, z, color='gray'):
+    fig.add_trace(go.Scatter3d(x=[x0, x1], y=[y, y], z=[z, z], mode='lines', line=dict(color=color, width=6), showlegend=False))
+
+def draw_cylinder(x, y, z_base, height, radius, color, opacity=1.0):
     z = np.linspace(z_base, z_base + height, 20)
     theta = np.linspace(0, 2*np.pi, 40)
     theta_grid, z_grid = np.meshgrid(theta, z)
     x_grid = x + radius * np.cos(theta_grid)
     y_grid = y + radius * np.sin(theta_grid)
-    return go.Surface(x=x_grid, y=y_grid, z=z_grid, colorscale=[[0, color], [1, color]], showscale=False, hoverinfo="skip")
+    fig.add_trace(go.Surface(x=x_grid, y=y_grid, z=z_grid, colorscale=[[0, color], [1, color]], showscale=False, opacity=opacity, hoverinfo="skip"))
 
-def create_box(x, y, z_base, height, width, depth, color):
-    x_vals = [x, x+width, x+width, x, x]
-    y_vals = [y, y, y+depth, y+depth, y]
-    # Draw 4 walls
-    traces = []
-    for i in range(4):
-        traces.append(go.Mesh3d(
-            x=[x_vals[i], x_vals[i+1], x_vals[i+1], x_vals[i]],
-            y=[y_vals[i], y_vals[i+1], y_vals[i+1], y_vals[i]],
-            z=[z_base, z_base, z_base+height, z_base+height],
-            color=color, opacity=0.5, hoverinfo="skip"
-        ))
-    return traces
+def draw_box(x, y, z_base, height, width, depth, color, opacity=0.8):
+    # Draws a simple 3D box using Mesh3d
+    vertices = [
+        (x, y, z_base), (x+width, y, z_base), (x+width, y+depth, z_base), (x, y+depth, z_base),
+        (x, y, z_base+height), (x+width, y, z_base+height), (x+width, y+depth, z_base+height), (x, y+depth, z_base+height)
+    ]
+    i = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 6]
+    j = [1, 2, 2, 5, 3, 6, 0, 7, 5, 6, 6, 7]
+    k = [2, 3, 5, 6, 6, 7, 7, 4, 6, 7, 1, 2]
+    x_vals = [v[0] for v in vertices]
+    y_vals = [v[1] for v in vertices]
+    z_vals = [v[2] for v in vertices]
+    fig.add_trace(go.Mesh3d(x=x_vals, y=y_vals, z=z_vals, i=i, j=j, k=k, color=color, opacity=opacity, hoverinfo="skip"))
 
-# Build the 3D Scene
-fig = go.Figure()
+# --- BUILD THE PROCESS TRAIN ---
 
-# 1. Feed Gas Pipeline (Gray)
-fig.add_trace(go.Scatter3d(x=[-10, -5], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='gray', width=8), name="Feed Gas"))
+# 1. Inlet & Slug Catcher
+draw_box(-12, -2, 0, 2, 3, 4, 'gray')
+draw_pipe(-12, -8, 0, 0)
 
-# 2. Acid Gas Removal (Amine Unit) - Box
-amine_color = 'red' if bypass_amine else 'green'
-fig.add_trace(go.Mesh3d(x=[-4, -1, -1, -4], y=[-1, -1, 1, 1], z=[0, 0, 2, 2], color=amine_color, opacity=0.8, name="Amine Unit"))
-fig.add_trace(go.Scatter3d(x=[-5, -4], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='gray', width=8), showlegend=False))
+# 2. AGRU (Acid Gas Removal)
+agru_color = 'red' if co2_freeze else 'green'
+draw_box(-8, -2, 0, 4, 3, 4, agru_color)
+draw_pipe(-5, -2, 0, 0)
 
-# 3. Dehydration & Mercury Removal - Short Cylinder
-fig.add_trace(go.Scatter3d(x=[-1, 1], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='gray', width=8), showlegend=False))
-fig.add_trace(create_cylinder(x=1.5, y=0, z_base=0, height=3, radius=0.5, color='blue'))
+# 3. Dehydration (Molecular Sieves)
+dehy_color = 'red' if hydrate_risk else 'blue'
+draw_cylinder(-1.5, 0, 0, 5, 1.5, dehy_color)
+draw_pipe(0, 2, 0, 0)
 
-# 4. Fractionation Column (NGL Extraction) - Tall Cylinder
-frac_color = 'red' if bypass_fractionation else 'green'
-fig.add_trace(go.Scatter3d(x=[2, 5], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='gray', width=8), showlegend=False))
-fig.add_trace(create_cylinder(x=6, y=0, z_base=0, height=6, radius=0.8, color=frac_color))
+# 4. Mercury Removal
+draw_cylinder(3, 0, 0, 3, 1.0, 'silver')
+draw_pipe(4, 5, 0, 0)
 
-# 5. Cryogenic Cold Box (Main Liquefaction) - Big Box
-cold_box_color = 'red' if final_co2 > 50 else 'cyan'
-fig.add_trace(go.Scatter3d(x=[7, 10], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='gray', width=8), showlegend=False))
-for trace in create_box(x=11, y=-1.5, z_base=0, height=4, width=3, depth=3, color=cold_box_color):
-    fig.add_trace(trace)
+# 5. NGL Fractionation Column
+frac_color = 'red' if final_c3 > 8.0 else 'green'
+draw_cylinder(6, 0, 0, 8, 1.0, frac_color)
+draw_pipe(7, 8, 0, 0)
 
-# 6. LNG Storage Tank (Dome Tank)
-fig.add_trace(go.Scatter3d(x=[14, 17], y=[0, 0], z=[0, 0], mode='lines', line=dict(color='blue', width=8), showlegend=False))
-# Tank Body
-fig.add_trace(create_cylinder(x=19, y=0, z_base=0, height=3, radius=2, color='white'))
-# Tank Dome
-u = np.linspace(0, 2*np.pi, 40); v = np.linspace(0, np.pi/2, 10)
-u_g, v_g = np.meshgrid(u, v)
-x_dome = 19 + 2 * np.cos(u_g) * np.sin(v_g)
-y_dome = 0 + 2 * np.sin(u_g) * np.sin(v_g)
-z_dome = 3 + 1.5 * np.cos(v_g)
-fig.add_trace(go.Surface(x=x_dome, y=y_dome, z=z_dome, colorscale=[[0, 'silver'], [1, 'silver']], showscale=False))
+# 6. Liquefaction Train (The Cold Box)
+cold_box_color = 'red' if (co2_freeze or hydrate_risk) else 'cyan'
+draw_box(8, -2, 0, 5, 4, 4, cold_box_color)
 
-# Layout Adjustments
+# 7. Refrigerant Compressors (Based on Tech)
+if "SMR" in tech:
+    draw_cylinder(9, 3, 0, 3, 1.2, 'orange') # Single compressor
+elif "C3MR" in tech:
+    draw_cylinder(8.5, 3, 0, 3, 1.0, 'orange') # Propane comp
+    draw_cylinder(10, 3, 0, 3, 1.0, 'purple') # MR comp
+else: # DMR
+    draw_cylinder(8, 3, 0, 3, 1.0, 'orange') 
+    draw_cylinder(9.5, 3, 0, 3, 1.0, 'purple')
+    draw_cylinder(11, 3, 0, 3, 1.0, 'green')
+
+# 8. Nitrogen Injection Unit (If used)
+if n2_injection > 0:
+    draw_cylinder(13, 0, 0, 4, 1.0, 'lightblue')
+
+# 9. LNG Storage & Loading
+draw_pipe(12, 15, 0, 0)
+# LNG Tank 1
+draw_cylinder(16, -2, 0, 4, 2.5, 'white')
+# LNG Tank 2
+draw_cylinder(16, 3, 0, 4, 2.5, 'white')
+# Jetty / Loading Arm
+draw_pipe(16, 20, 0, 0)
+draw_pipe(20, 22, 2, 0)
+
+# Layout
 fig.update_layout(
     scene=dict(
-        xaxis=dict(visible=False, range=[-11, 22]),
-        yaxis=dict(visible=False, range=[-5, 5]),
+        xaxis=dict(visible=False, range=[-13, 23]),
+        yaxis=dict(visible=False, range=[-5, 6]),
         zaxis=dict(visible=False, range=[0, 10]),
-        camera=dict(eye=dict(x=0.5, y=-2.0, z=0.8)),
-        aspectmode='manual', aspectratio=dict(x=2, y=1, z=1)
+        camera=dict(eye=dict(x=0.2, y=-2.5, z=1.0)),
+        aspectmode='manual', aspectratio=dict(x=2.5, y=1, z=1)
     ),
-    margin=dict(l=0, r=0, b=0, t=0), height=500, showlegend=False,
-    paper_bgcolor="#f4f4f4"
+    margin=dict(l=0, r=0, b=0, t=0), height=500,
+    paper_bgcolor="#e8ecf1"
 )
 
 # ==========================================
-# 4. DASHBOARD & ALERTS
+# 4. DASHBOARD & ECONOMICS
 # ==========================================
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Plant Status", plant_status)
-col2.metric("Final CO2", f"{final_co2} ppm", delta="- Danger" if final_co2 > 50 else "Safe", delta_color="inverse")
-col3.metric("LNG Wobbe Index", f"{wobbe_index:.1f} MJ/m³", delta=f"{wobbe_index - 50:.1f} vs Ideal", delta_color="inverse")
-col4.metric("Product Spec", spec_status)
+st.subheader("📊 Plant Operations & Economics")
 
-if final_co2 > 50:
-    st.error(f"🚨 **CRITICAL FAILURE:** CO2 levels are at {final_co2} ppm. At temperatures below -56°C, CO2 forms dry ice. The cryogenic cold box (highlighted in RED) has frozen solid and plugged. The plant has tripped.")
-elif spec_status == "OFF-SPEC (Rich)":
-    st.warning("⚠️ **WARNING (Rich LNG):** Bypassing fractionation leaves heavy hydrocarbons (C3+) in the LNG. The Wobbe Index is too high. If this is sent to Europe or SA, it will cause gas turbine flashback. You must install a Nitrogen Injection unit.")
-elif spec_status == "OFF-SPEC (Lean)":
-    st.warning("⚠️ **WARNING (Lean LNG):** High Nitrogen content from US shale gas has dropped the Wobbe Index. The heating value is too low for most international markets.")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Plant Capacity", f"{plant_capacity} MTPA", tech.split(" ")[0])
+c2.metric("Specific Power", f"{base_power} kWh/t")
+c3.metric("Wobbe Index", f"{wobbe_index:.1f} MJ/m³", "Rich" if wobbe_index > 54 else "Lean" if wobbe_index < 45 else "Spec", delta_color="inverse" if wobbe_index > 54 else "normal")
+c4.metric("Daily Profit", f"${daily_profit:,.0f}")
+c5.metric("Feed Water", f"{water_ppm} ppm", "Frozen" if hydrate_risk else "Safe", delta_color="inverse" if hydrate_risk else "normal")
+
+if hydrate_risk:
+    st.error("🚨 **HYDRATE FORMATION!** Dehydration was bypassed. Water entered the cryogenic cold box and froze into ice/hydrates, completely plugging the heat exchangers. Plant has tripped offline.")
+elif co2_freeze:
+    st.error("🚨 **CO2 FREEZE!** Acid Gas Removal was insufficient. CO2 entered the cold box and froze into dry ice. Heat exchangers are plugged. Plant has tripped offline.")
+elif wobbe_index > 54:
+    st.warning("⚠️ **OFF-SPEC LNG (RICH):** The gas is too rich. The Wobbe Index is too high for European or SA buyers. You must increase Nitrogen Injection or increase fractionation.")
 else:
-    st.success(f"✅ **PLANT OPTIMAL:** The feed gas has been properly treated. The LNG meets all international custody transfer specifications.")
+    st.success("✅ **PLANT ONLINE:** Running optimally. LNG meets global custody transfer specifications.")
 
 st.plotly_chart(fig, use_container_width=True)
 
 # ==========================================
-# 5. CASE STUDY CONTEXT
+# 5. TECHNOLOGY & ECONOMIC BREAKDOWN
 # ==========================================
-st.markdown("### 📖 Plant Context & Geographical Challenges")
+with st.expander("💰 Liquefaction Technology Economics & Thermodynamics"):
+    st.markdown(f"### Currently Selected: **{tech}**")
+    if "SMR" in tech:
+        st.write("- **Thermodynamics:** Uses one mixed refrigerant cycle (methane/ethane/propane).")
+        st.write("- **Pros:** Lower CAPEX (~$600/tonne). Easier to build and operate. Great for remote/modular FLNG.")
+        st.write("- **Cons:** Lower thermal efficiency (~320-380 kWh/t). Lower capacity. Harder to optimize for rich gas.")
+    elif "C3MR" in tech:
+        st.write("- **Thermodynamics:** Propane pre-cools the gas to -35°C, then a Mixed Refrigerant (MR) cools it to -162°C.")
+        st.write("- **Pros:** Industry standard (APCI). High efficiency (~300 kWh/t). Reliable. Used in Qatar.")
+        st.write("- **Cons:** High CAPEX. Highly complex to start up.")
+    else:
+        st.write("- **Thermodynamics:** Two separate Mixed Refrigerant cycles (one pre-cooling, one liquefaction).")
+        st.write("- **Pros:** Highest capacity (up to 8 MTPA per train). Excellent efficiency (~280 kWh/t) for rich gas. Used by Shell.")
+        st.write("- **Cons:** Highest CAPEX. Extreme operational complexity.")
+
+# ==========================================
+# 6. LOCATION CONTEXT
+# ==========================================
 if location == "Angola LNG (Soyo)":
-    st.info("**Angola:** Produces very 'rich' gas (high C3+). The fractionation column (tall cylinder) is critical here. If bypassed, the LNG Wobbe Index will spike above 54, meaning it cannot be sold on the global spot market without blending.")
+    st.info("**Angola:** The gas here is extremely 'rich' (high C3+). If you don't use the Fractionation Column, your Wobbe Index will spike, and you won't be able to sell it.")
 elif location == "Qatar LNG (Ras Laffan)":
-    st.info("**Qatar:** Produces 'sour' gas from the North Field with massive CO2 and H2S content. The Amine Unit (box) is the most critical piece of equipment. If bypassed, the cryogenic cold box will freeze instantly.")
+    st.info("**Qatar:** The North Field has massive CO2 reserves. The Amine Unit (AGRU) must be maintained at 100% capacity. If you bypass it, the CO2 will freeze and destroy the cold box.")
 else:
-    st.info("**USA (Sabine Pass):** Produces very 'lean' shale gas with high Nitrogen. While easy to liquefy without freezing, the high Nitrogen lowers the Wobbe Index and heating value. The plant may need a Nitrogen Rejection Unit (NRU) to meet specs.")
+    st.info("**USA (Sabine Pass):** The gas is very lean. You need less fractionation, but you must watch out for high water content which can quickly freeze in the cold box if the molecular sieves are bypassed.")
